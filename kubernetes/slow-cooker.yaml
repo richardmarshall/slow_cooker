@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: ReplicationController
+metadata:
+  name: slow-cooker
+spec:
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: slow-cooker
+    spec:
+      containers:
+      - name: slow-cooker
+        image: buoyantio/slow_cooker:latest
+        command:
+        - /bin/sh
+        args:
+        - -c
+        - "slow_cooker -qps ${SLOW_COOKER_QPS} -concurrency ${SLOW_COOKER_CONCURRENCY} ${SLOW_COOKER_HOST}"
+        env:
+        - name: SLOW_COOKER_QPS
+          value: "10"
+        - name: SLOW_COOKER_CONCURRENCY
+          value: "1"
+        - name: SLOW_COOKER_HOST
+          value: http://example.com:4140
