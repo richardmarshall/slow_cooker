@@ -42,6 +42,28 @@ or:
 | `-hashSampleRate`     | `0.0`     | Sampe Rate for checking request body's hash. Interval in the range of [0.0, 1.0] |
 | `-hashValue`          | `<none>`  | fnv-1a hash value to check the request body against |
 
+# Using a URL file
+
+If the `<url>` argument begins with `@` the argument will be treated as a file path to read a newline separated list of URLs to send requests to, or if the value is `@-`, the url list will be read from stdin.
+
+Example url file contents:
+
+```
+http://localhost:4140/foo
+http://localhost:4140/bar
+http://localhost:4140/baz
+```
+
+Reading url list from a file:
+
+```$ slow_cooker -qps 100 @urllist```
+
+Using a hypothetical url generation script to pipe url list to slow cooker via stdin:
+
+```$ url_generator | slow_cooker -qps 100 @-```
+
+The urls in the list file will be processed sequentially.
+
 # Using multiple Host headers
 
 If you want to send multiple Host headers to a backend, pass a comma separated

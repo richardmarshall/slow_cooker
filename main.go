@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/tls"
 	"flag"
@@ -49,7 +50,6 @@ type MeasuredResponse struct {
 
 func newClient(
 	compress bool,
-	https bool,
 	noreuse bool,
 	maxConn int,
 ) *http.Client {
@@ -58,9 +58,7 @@ func newClient(
 		DisableKeepAlives:   noreuse,
 		MaxIdleConnsPerHost: maxConn,
 		Proxy:               http.ProxyFromEnvironment,
-	}
-	if https {
-		tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+		TLSClientConfig:     &tls.Config{InsecureSkipVerify: true},
 	}
 	return &http.Client{Transport: &tr}
 }
@@ -207,6 +205,43 @@ func loadData(data string) []byte {
 	return requestData
 }
 
+func loadURLs(urldest string) []*url.URL {
+	var urls []*url.URL
+	var err error
+
+	if strings.HasPrefix(urldest, "@") {
+		var file *os.File
+		path := urldest[1:]
+		if path == "-" {
+			file = os.Stdin
+		} else {
+			file, err = os.Open(path)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, err.Error())
+				os.Exit(1)
+			}
+			defer file.Close()
+		}
+		scanner := bufio.NewScanner(file)
+		for scanner.Scan() {
+			line := scanner.Text()
+			URL, err := url.Parse(line)
+			if err != nil {
+				exUsage("invalid URL: '%s': %s\n", urldest, err.Error())
+			}
+			urls = append(urls, URL)
+		}
+	} else {
+		pURL, err := url.Parse(urldest)
+		if err != nil {
+			exUsage("invalid URL: '%s': %s\n", urldest, err.Error())
+		}
+		urls = append(urls, pURL)
+	}
+
+	return urls
+}
+
 var (
 	promRequests = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "requests",
@@ -276,10 +311,7 @@ func main() {
 	}
 
 	urldest := flag.Arg(0)
-	dstURL, err := url.Parse(urldest)
-	if err != nil {
-		exUsage("invalid URL: '%s': %s\n", urldest, err.Error())
-	}
+	dstURLs := loadURLs(urldest)
 
 	if *qps < 1 {
 		exUsage("qps must be at least 1")
@@ -312,8 +344,7 @@ func main() {
 	var totalTrafficTarget int
 	totalTrafficTarget = *qps * *concurrency * int(interval.Seconds())
 
-	doTLS := dstURL.Scheme == "https"
-	client := newClient(*compress, doTLS, *noreuse, *concurrency)
+	client := newClient(*compress, *noreuse, *concurrency)
 	var sendTraffic sync.WaitGroup
 	// The time portion of the header can change due to timezone.
 	timeLen := len(time.Now().Format(time.RFC3339))
@@ -321,11 +352,17 @@ func main() {
 	intLen := len(fmt.Sprintf("%s", *interval))
 	intPadding := strings.Repeat(" ", intLen-2)
 
-	fmt.Printf("# sending %d %s req/s with concurrency=%d to %s ...\n", (*qps * *concurrency), *method, *concurrency, dstURL)
+	if len(dstURLs) == 1 {
+		fmt.Printf("# sending %d %s req/s with concurrency=%d to %s ...\n", (*qps * *concurrency), *method, *concurrency, dstURLs[0])
+	} else {
+		fmt.Printf("# sending %d %s req/s with concurrency=%d using url list %s ...\n", (*qps * *concurrency), *method, *concurrency, urldest[1:])
+	}
+
 	fmt.Printf("# %s good/b/f t   goal%% %s min [p50 p95 p99  p999]  max bhash change\n", timePadding, intPadding)
 	for i := 0; i < *concurrency; i++ {
 		ticker := time.NewTicker(timeToWait)
 		go func() {
+			y := 0
 			// For each goroutine we want to reuse a buffer for performance reasons.
 			bodyBuffer := make([]byte, 50000)
 			sendTraffic.Add(1)
@@ -340,11 +377,15 @@ func main() {
 				shouldFinishLock.RLock()
 				if !shouldFinish {
 					shouldFinishLock.RUnlock()
-					sendRequest(client, *method, dstURL, hosts[rand.Intn(len(hosts))], headers, requestData, atomic.AddUint64(&reqID, 1), *hashValue, checkHash, hasher, received, bodyBuffer)
+					sendRequest(client, *method, dstURLs[y], hosts[rand.Intn(len(hosts))], headers, requestData, atomic.AddUint64(&reqID, 1), *hashValue, checkHash, hasher, received, bodyBuffer)
 				} else {
 					shouldFinishLock.RUnlock()
 					sendTraffic.Done()
 					return
+				}
+				y += 1
+				if y == len(dstURLs) {
+					y = 0
 				}
 			}
 		}()
