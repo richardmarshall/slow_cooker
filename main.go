@@ -244,6 +244,37 @@ func loadURLs(urldest string) []*url.URL {
 	return urls
 }
 
+func loadDataMix(path string) [][]byte {
+	var requestMix [][]byte
+	var err error
+	var file *os.File
+
+	if path == "-" {
+		file = os.Stdin
+	} else {
+		file, err = os.Open(path)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, err.Error())
+			os.Exit(1)
+		}
+		defer file.Close()
+	}
+
+	scanner := bufio.NewScanner(file)
+
+	for scanner.Scan() {
+		rawLine := scanner.Text()
+		line, err := strconv.Unquote("\"" + rawLine + "\"")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, err.Error())
+			os.Exit(1)
+		}
+		requestMix = append(requestMix, []byte(line))
+	}
+
+	return requestMix
+}
+
 var (
 	promRequests = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "requests",
@@ -292,6 +323,7 @@ func main() {
 	headers := make(headerSet)
 	flag.Var(&headers, "header", "HTTP request header. (can be repeated.)")
 	data := flag.String("data", "", "HTTP request data")
+	dataMixFile := flag.String("datamix", "", "HTTP request data mix file")
 	metricAddr := flag.String("metric-addr", "", "address to serve metrics on")
 	hashValue := flag.Uint64("hashValue", 0, "fnv-1a hash value to check the request body against")
 	hashSampleRate := flag.Float64("hashSampleRate", 0.0, "Sampe Rate for checking request body's hash. Interval in the range of [0.0, 1.0]")
@@ -325,7 +357,13 @@ func main() {
 
 	hosts := strings.Split(*host, ",")
 
-	requestData := loadData(*data)
+	var requestData [][]byte
+
+	if *dataMixFile != "" {
+		requestData = loadDataMix(*dataMixFile)
+	} else {
+		requestData = [][]byte{loadData(*data)}
+	}
 
 	// Repsonse tracking metadata.
 	count := uint64(0)
@@ -361,14 +399,19 @@ func main() {
 	}
 
 	fmt.Printf("# %s good/b/f t   goal%% %s min [p50 p95 p99  p999]  max bhash change\n", timePadding, intPadding)
-	stride := *concurrency
-	if stride > len(dstURLs) {
-		stride = 1
+	urlStride := *concurrency
+	if urlStride > len(dstURLs) {
+		urlStride = 1
+	}
+	dataStride := *concurrency
+	if dataStride > len(requestData) {
+		dataStride = 1
 	}
 	for i := 0; i < *concurrency; i++ {
 		ticker := time.NewTicker(timeToWait)
-		go func(offset int) {
-			y := offset
+		go func(urlOffset, dataOffset int) {
+			dataIdx := dataOffset
+			urlIdx := urlOffset
 			// For each goroutine we want to reuse a buffer for performance reasons.
 			bodyBuffer := make([]byte, 50000)
 			sendTraffic.Add(1)
@@ -383,18 +426,22 @@ func main() {
 				shouldFinishLock.RLock()
 				if !shouldFinish {
 					shouldFinishLock.RUnlock()
-					sendRequest(client, *method, dstURLs[y], hosts[rand.Intn(len(hosts))], headers, requestData, atomic.AddUint64(&reqID, 1), *hashValue, checkHash, hasher, received, bodyBuffer)
+					sendRequest(client, *method, dstURLs[urlIdx], hosts[rand.Intn(len(hosts))], headers, requestData[dataIdx], atomic.AddUint64(&reqID, 1), *hashValue, checkHash, hasher, received, bodyBuffer)
 				} else {
 					shouldFinishLock.RUnlock()
 					sendTraffic.Done()
 					return
 				}
-				y += stride
-				if y >= len(dstURLs) {
-					y = offset
+				urlIdx += urlStride
+				if urlIdx >= len(dstURLs) {
+					urlIdx = urlOffset
+				}
+				dataIdx += dataStride
+				if dataIdx >= len(requestData) {
+					dataIdx = dataOffset
 				}
 			}
-		}(i % len(dstURLs))
+		}(i%len(dstURLs), i%len(requestData))
 	}
 
 	cleanup := make(chan bool, 2)
