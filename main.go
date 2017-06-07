@@ -361,10 +361,14 @@ func main() {
 	}
 
 	fmt.Printf("# %s good/b/f t   goal%% %s min [p50 p95 p99  p999]  max bhash change\n", timePadding, intPadding)
+	stride := *concurrency
+	if stride > len(dstURLs) {
+		stride = 1
+	}
 	for i := 0; i < *concurrency; i++ {
 		ticker := time.NewTicker(timeToWait)
-		go func() {
-			y := 0
+		go func(offset int) {
+			y := offset
 			// For each goroutine we want to reuse a buffer for performance reasons.
 			bodyBuffer := make([]byte, 50000)
 			sendTraffic.Add(1)
@@ -385,12 +389,12 @@ func main() {
 					sendTraffic.Done()
 					return
 				}
-				y += 1
-				if y == len(dstURLs) {
-					y = 0
+				y += stride
+				if y >= len(dstURLs) {
+					y = offset
 				}
 			}
-		}()
+		}(i % len(dstURLs))
 	}
 
 	cleanup := make(chan bool, 2)
