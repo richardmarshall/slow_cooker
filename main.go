@@ -208,6 +208,7 @@ func loadData(data string) []byte {
 func loadURLs(urldest string) []*url.URL {
 	var urls []*url.URL
 	var err error
+	var scanner *bufio.Scanner
 
 	if strings.HasPrefix(urldest, "@") {
 		var file *os.File
@@ -222,21 +223,22 @@ func loadURLs(urldest string) []*url.URL {
 			}
 			defer file.Close()
 		}
-		scanner := bufio.NewScanner(file)
-		for scanner.Scan() {
-			line := scanner.Text()
-			URL, err := url.Parse(line)
-			if err != nil {
-				exUsage("invalid URL: '%s': %s\n", urldest, err.Error())
-			}
-			urls = append(urls, URL)
-		}
+		scanner = bufio.NewScanner(file)
 	} else {
-		pURL, err := url.Parse(urldest)
+		scanner = bufio.NewScanner(strings.NewReader(urldest))
+	}
+
+	for i := 1; scanner.Scan(); i++ {
+		line := scanner.Text()
+		URL, err := url.Parse(line)
 		if err != nil {
-			exUsage("invalid URL: '%s': %s\n", urldest, err.Error())
+			exUsage("invalid URL on line %d: '%s': %s\n", i, line, err.Error())
+		} else if URL.Scheme == "" {
+			exUsage("invalid URL on line %d: '%s': Missing scheme\n", i, line)
+		} else if URL.Host == "" {
+			exUsage("invalid URL on line %d: '%s': Missing host\n", i, line)
 		}
-		urls = append(urls, pURL)
+		urls = append(urls, URL)
 	}
 
 	return urls
