@@ -263,12 +263,8 @@ func loadDataMix(path string) [][]byte {
 	scanner := bufio.NewScanner(file)
 
 	for scanner.Scan() {
-		rawLine := scanner.Text()
-		line, err := strconv.Unquote("\"" + rawLine + "\"")
-		if err != nil {
-			fmt.Fprintf(os.Stderr, err.Error())
-			os.Exit(1)
-		}
+		line := scanner.Text()
+		line = strings.Replace(line, `\n`, "\n", -1)
 		requestMix = append(requestMix, []byte(line))
 	}
 
